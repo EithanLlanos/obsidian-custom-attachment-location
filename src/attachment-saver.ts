@@ -48,12 +48,14 @@ interface AttachmentSaverSaveAttachmentCoreParams {
   readonly attachmentFileBaseName: string;
   readonly attachmentFileContent: ArrayBuffer;
   readonly attachmentFileExtension: string;
+  readonly noteFilePathOverride?: string;
 }
 
 interface AttachmentSaverSaveAttachmentParams {
   readonly attachmentFileBaseName: string;
   readonly attachmentFileContent: ArrayBuffer;
   readonly attachmentFileExtension: string;
+  readonly noteFilePathOverride?: string;
 }
 
 export class AttachmentSaver {
@@ -84,11 +86,15 @@ export class AttachmentSaver {
     let attachmentFileExtension = params.attachmentFileExtension;
 
     const activeNoteFile = this.app.workspace.getActiveFile();
-    if (!activeNoteFile || this.pluginSettingsComponent.settings.isPathIgnored(activeNoteFile.path)) {
+    const isFolderDrop = !!params.noteFilePathOverride;
+    const resolvedNoteFilePath = isFolderDrop ? params.noteFilePathOverride! : (activeNoteFile?.path ?? '');
+
+    if (!isFolderDrop && (!activeNoteFile || this.pluginSettingsComponent.settings.isPathIgnored(activeNoteFile.path))) {
       return await this.saveAttachmentCore({
         attachmentFileBaseName,
         attachmentFileContent,
-        attachmentFileExtension
+        attachmentFileExtension,
+        ...(params.noteFilePathOverride !== undefined ? { noteFilePathOverride: params.noteFilePathOverride } : {})
       });
     }
 
@@ -134,7 +140,7 @@ export class AttachmentSaver {
           app: this.app,
           attachmentFileContent,
           attachmentFileStats: this.arrayBufferMap.getFileStats(attachmentFileContent),
-          noteFilePath: activeNoteFile.path,
+          noteFilePath: resolvedNoteFilePath,
           originalAttachmentFileName: makeFileName(attachmentFileBaseName, attachmentFileExtension),
           pluginSettingsComponent: this.pluginSettingsComponent,
           tokenValidator: this.tokenValidator
@@ -145,7 +151,8 @@ export class AttachmentSaver {
     const attachmentFile = await this.saveAttachmentCore({
       attachmentFileBaseName,
       attachmentFileContent,
-      attachmentFileExtension
+      attachmentFileExtension,
+      ...(params.noteFilePathOverride !== undefined ? { noteFilePathOverride: params.noteFilePathOverride } : {})
     });
     if (this.pluginSettingsComponent.settings.markdownUrlFormat) {
       const markdownUrl = await new Substitutions({
@@ -155,7 +162,7 @@ export class AttachmentSaver {
         attachmentFileStats: this.arrayBufferMap.getFileStats(attachmentFileContent) ?? undefined,
         generatedAttachmentFileName: attachmentFile.name,
         generatedAttachmentFilePath: attachmentFile.path,
-        noteFilePath: activeNoteFile.path,
+        noteFilePath: resolvedNoteFilePath,
         originalAttachmentFileName: makeFileName(attachmentFileBaseName, attachmentFileExtension),
         pluginSettingsComponent: this.pluginSettingsComponent,
         tokenValidator: this.tokenValidator
@@ -169,21 +176,30 @@ export class AttachmentSaver {
 
   private async saveAttachmentCore(params: AttachmentSaverSaveAttachmentCoreParams): Promise<TFile> {
     const noteFile = this.app.workspace.getActiveFile();
+    const isFolderDrop = !!params.noteFilePathOverride;
+    
     const attachmentFileStats = this.arrayBufferMap.getFileStats(params.attachmentFileContent);
 
     const attachmentFileContent = params.attachmentFileContent;
-    const attachmentPath = await this.attachmentPathManager.getAvailablePathForAttachments({
-      attachmentFileBaseName: params.attachmentFileBaseName,
-      attachmentFileExtension: params.attachmentFileExtension,
-      attachmentFileStats,
-      context: actionContextToAttachmentPathContext(ActionContext.SaveAttachment),
-      notePathOrFile: noteFile,
-      oldAttachmentPathOrFile: makeFileName(params.attachmentFileBaseName, params.attachmentFileExtension),
-      readAttachmentFileContent: (): Promise<ArrayBuffer> => Promise.resolve(attachmentFileContent),
-      shouldSkipDuplicateCheck: false,
-      shouldSkipGeneratedAttachmentFileName: true,
-      shouldSkipMissingAttachmentFolderCreation: false
-    });
+    
+    let attachmentPath: string;
+    if (isFolderDrop) {
+       const folderPath = params.noteFilePathOverride!;
+       attachmentPath = await this.getAvailablePathInFolder(folderPath, params.attachmentFileBaseName, params.attachmentFileExtension);
+    } else {
+       attachmentPath = await this.attachmentPathManager.getAvailablePathForAttachments({
+         attachmentFileBaseName: params.attachmentFileBaseName,
+         attachmentFileExtension: params.attachmentFileExtension,
+         attachmentFileStats,
+         context: actionContextToAttachmentPathContext(ActionContext.SaveAttachment),
+         notePathOrFile: noteFile,
+         oldAttachmentPathOrFile: makeFileName(params.attachmentFileBaseName, params.attachmentFileExtension),
+         readAttachmentFileContent: (): Promise<ArrayBuffer> => Promise.resolve(attachmentFileContent),
+         shouldSkipDuplicateCheck: false,
+         shouldSkipGeneratedAttachmentFileName: true,
+         shouldSkipMissingAttachmentFolderCreation: false
+       });
+    }
 
     const imageSize = await this.imageManager.getImageSize({
       content: params.attachmentFileContent,
@@ -201,5 +217,20 @@ export class AttachmentSaver {
         mtime: attachmentFileStats?.mtime ? Math.trunc(attachmentFileStats.mtime) : undefined
       }))
     );
+  }
+
+  private async getAvailablePathInFolder(folderPath: string, baseName: string, extension: string): Promise<string> {
+    let suffixNum = 0;
+    while (true) {
+      const fileName = makeFileName(
+        suffixNum === 0 ? baseName : `${baseName}${this.pluginSettingsComponent.settings.duplicateNameSeparator}${String(suffixNum)}`,
+        extension
+      );
+      const path = folderPath === '/' ? fileName : `${folderPath}/${fileName}`;
+      if (!this.app.vault.getAbstractFileByPath(path)) {
+        return path;
+      }
+      suffixNum++;
+    }
   }
 }

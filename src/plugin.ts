@@ -11,6 +11,7 @@ import { PluginDataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
 import { PluginBase } from 'obsidian-dev-utils/obsidian/plugin/plugin';
 import { PluginEventSourceImpl } from 'obsidian-dev-utils/obsidian/plugin/plugin-event-source';
 import { ValueWrapper } from 'obsidian-dev-utils/value-wrapper';
+import { basename, extname } from 'obsidian-dev-utils/path';
 
 import { ArrayBufferMap } from './array-buffer-map.ts';
 import { AttachmentCollector } from './attachment-collector.ts';
@@ -171,5 +172,89 @@ export class Plugin extends PluginBase {
     );
 
     this.addChild(new PrismComponent());
+
+    this.registerDomEvent(activeDocument, 'drop', this.handleGlobalDrop.bind(this, attachmentSaver, arrayBufferMap), { capture: true });
+  }
+
+  // eslint-disable-next-line complexity
+  private async handleGlobalDrop(attachmentSaver: AttachmentSaver, arrayBufferMap: ArrayBufferMap, evt: DragEvent): Promise<void> {
+    const target = evt.target as HTMLElement | null;
+    if (!target) {
+      return;
+    }
+
+    const navFolderTitle = target.closest('.nav-folder-title');
+    if (!navFolderTitle) {
+      return;
+    }
+
+    const folderPath = navFolderTitle.getAttribute('data-path');
+    if (folderPath === null) {
+      return;
+    }
+
+    const files = evt.dataTransfer?.files;
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    let hasActualFiles = false;
+    for (let i = 0; i < files.length; i++) {
+        const file = files.item(i);
+        if (file && file.size > 0 && file.type.startsWith('image/')) {
+            hasActualFiles = true;
+        }
+    }
+    if (!hasActualFiles) {
+      return;
+    }
+
+    evt.preventDefault();
+    evt.stopPropagation();
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files.item(i);
+      if (!file) {
+        continue;
+      }
+      
+      if (!file.type.startsWith('image/')) {
+          const arrayBuffer = await file.arrayBuffer();
+          const extension = extname(file.name).slice(1);
+          const baseName = basename(file.name, '.' + extension);
+          
+          let suffixNum = 0;
+          while (true) {
+            const fileName = suffixNum === 0 ? file.name : `${baseName} ${String(suffixNum)}.${extension}`;
+            const path = folderPath === '/' ? fileName : `${folderPath}/${fileName}`;
+            if (!this.app.vault.getAbstractFileByPath(path)) {
+              await this.app.vault.createBinary(path, arrayBuffer);
+              break;
+            }
+            suffixNum++;
+          }
+          continue;
+      }
+
+      const arrayBuffer = await file.arrayBuffer();
+      const extension = extname(file.name).slice(1);
+      const baseName = basename(file.name, '.' + extension);
+      
+      const fileStats = { ctime: file.lastModified, mtime: file.lastModified, size: file.size };
+      
+      try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+          (arrayBufferMap as any).setFileStats?.(arrayBuffer, fileStats);
+      } catch {
+          // Ignore
+      }
+
+      await attachmentSaver.saveAttachment({
+          attachmentFileBaseName: baseName,
+          attachmentFileContent: arrayBuffer,
+          attachmentFileExtension: extension,
+          noteFilePathOverride: folderPath
+      });
+    }
   }
 }
