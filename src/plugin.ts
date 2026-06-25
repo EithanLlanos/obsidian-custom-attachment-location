@@ -201,7 +201,7 @@ export class Plugin extends PluginBase {
     let hasActualFiles = false;
     for (let i = 0; i < files.length; i++) {
         const file = files.item(i);
-        if (file && file.size > 0 && file.type.startsWith('image/')) {
+        if (file && file.size > 0 && (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/'))) {
             hasActualFiles = true;
         }
     }
@@ -218,7 +218,8 @@ export class Plugin extends PluginBase {
         continue;
       }
       
-      if (!file.type.startsWith('image/')) {
+      const isMedia = file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/');
+      if (!isMedia) {
           const arrayBuffer = await file.arrayBuffer();
           const extension = extname(file.name).slice(1);
           const baseName = basename(file.name, '.' + extension);
