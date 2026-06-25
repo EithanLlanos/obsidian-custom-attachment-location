@@ -56,10 +56,12 @@ export class ImageManager {
     if (mimeType) {
       switch (this.pluginSettingsComponent.settings.convertImagesToJpegMode) {
         case ConvertImagesToJpegMode.AllImages:
-          shouldConvertImageToJpeg = true;
+          if (mimeType !== 'image/gif') {
+            shouldConvertImageToJpeg = true;
+          }
           break;
         case ConvertImagesToJpegMode.AllImagesExceptAlreadyJpegFiles:
-          if (mimeType !== 'image/jpeg') {
+          if (mimeType !== 'image/jpeg' && mimeType !== 'image/gif') {
             shouldConvertImageToJpeg = true;
           }
           break;
